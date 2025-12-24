@@ -614,7 +614,22 @@ export default function SignalAnalysisLab() {
 
   const canAnalyze = inputMode === 'text'
     ? rawConversation.trim().length >= 20
+    : uploadedImages.length > 0;
+
+  const isReadyToAnalyze = inputMode === 'text'
+    ? rawConversation.trim().length >= 20
     : uploadedImages.length > 0 && uploadedImages.every(img => img.processed) && rawConversation.trim().length >= 20;
+
+  const needsOCR = inputMode === 'image' && uploadedImages.length > 0 && !uploadedImages.every(img => img.processed);
+
+  // Handle the main action button - either OCR or Parse
+  const handleMainAction = async () => {
+    if (inputMode === 'image' && needsOCR) {
+      await processImagesOCR();
+    } else if (isReadyToAnalyze) {
+      handleParse();
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#08080c] text-zinc-100">
@@ -852,14 +867,18 @@ export default function SignalAnalysisLab() {
             )}
 
             <button
-              onClick={handleParse}
-              disabled={!canAnalyze || (inputMode === 'image' && processingImages)}
+              onClick={handleMainAction}
+              disabled={!canAnalyze || processingImages}
               className="w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl font-semibold text-white transition-all flex items-center justify-center gap-2 group"
             >
-              {inputMode === 'image' && uploadedImages.length > 0 && !uploadedImages.every(img => img.processed) ? (
-                <>Extract & Analyze <Zap className="w-4 h-4" /></>
-              ) : (
+              {processingImages ? (
+                <>Processing... <Loader2 className="w-4 h-4 animate-spin" /></>
+              ) : needsOCR ? (
+                <>Extract Text <Zap className="w-4 h-4" /></>
+              ) : isReadyToAnalyze ? (
                 <>Analyze Conversation <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" /></>
+              ) : (
+                <>Upload Screenshots First</>
               )}
             </button>
 
