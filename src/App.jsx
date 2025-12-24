@@ -1,5 +1,6 @@
-import React, { useState, useMemo } from 'react';
-import { Upload, FileText, Target, Brain, Zap, Shield, AlertTriangle, CheckCircle, Clock, TrendingUp, TrendingDown, Copy, ChevronRight, ChevronDown, MessageSquare, Users, Crosshair, Sparkles, Share2, BarChart3, GitBranch, Timer, Award, Eye, EyeOff } from 'lucide-react';
+import React, { useState, useCallback, useRef } from 'react';
+import { Upload, FileText, Target, Brain, Zap, Shield, AlertTriangle, CheckCircle, Clock, TrendingUp, TrendingDown, Copy, ChevronRight, ChevronDown, MessageSquare, Users, Crosshair, Sparkles, Share2, BarChart3, GitBranch, Timer, Award, Eye, EyeOff, Image, X, GripVertical, Loader2 } from 'lucide-react';
+import Tesseract from 'tesseract.js';
 
 // Sample conversation for demo
 const SAMPLE_CONVERSATION = `[11/15/24, 9:32 PM] Alex: Hey! Great meeting you at the conference yesterday
@@ -23,23 +24,23 @@ const SAMPLE_CONVERSATION = `[11/15/24, 9:32 PM] Alex: Hey! Great meeting you at
 const analyzeConversation = (messages, config) => {
   const youMessages = messages.filter(m => m.speaker === 'You');
   const themMessages = messages.filter(m => m.speaker !== 'You');
-  
+
   // Calculate response times
   const avgYourResponseTime = 42; // minutes (calculated from timestamps)
   const avgTheirResponseTime = 28;
-  
+
   // Power dynamics calculation
   const initiationScore = themMessages[0]?.speaker !== 'You' ? 60 : 40;
   const investmentScore = themMessages.length > youMessages.length ? 55 : 45;
-  const pursuitSignals = themMessages.filter(m => 
-    m.content.toLowerCase().includes('?') || 
+  const pursuitSignals = themMessages.filter(m =>
+    m.content.toLowerCase().includes('?') ||
     m.content.toLowerCase().includes('free') ||
     m.content.toLowerCase().includes('meet') ||
     m.content.toLowerCase().includes('looking forward')
   ).length;
-  
+
   const powerBalance = Math.min(75, Math.max(25, 50 + (pursuitSignals * 5) - (youMessages.length > themMessages.length ? 10 : 0)));
-  
+
   // Win probability based on signals
   const positiveSignals = [
     themMessages.some(m => m.content.toLowerCase().includes('impressive')),
@@ -50,9 +51,9 @@ const analyzeConversation = (messages, config) => {
     themMessages.length >= youMessages.length,
     pursuitSignals >= 2
   ].filter(Boolean).length;
-  
+
   const winProbability = Math.min(92, 45 + (positiveSignals * 7));
-  
+
   return {
     powerBalance,
     winProbability,
@@ -60,7 +61,7 @@ const analyzeConversation = (messages, config) => {
     avgResponseTime: { you: avgYourResponseTime, them: avgTheirResponseTime },
     initiator: themMessages[0]?.speaker || 'Them',
     themName: themMessages[0]?.speaker || 'Them',
-    
+
     behavioralProfile: {
       communicationStyle: 'Direct-Professional',
       decisionSpeed: 'Moderate-Fast',
@@ -71,7 +72,7 @@ const analyzeConversation = (messages, config) => {
       attachmentStyle: 'Secure-Pragmatic',
       responsePattern: 'Engaged-Initiating'
     },
-    
+
     yourDNA: {
       style: 'Strategic Validator',
       traits: ['Measured response timing', 'Value-first positioning', 'Controlled availability'],
@@ -80,7 +81,7 @@ const analyzeConversation = (messages, config) => {
       archetype: 'The Consultant',
       archetypeDescription: 'You communicate with deliberate pacing and position yourself as the prize. Your responses create value before asking for anything.'
     },
-    
+
     criticalMoments: [
       {
         turn: 5,
@@ -111,9 +112,9 @@ const analyzeConversation = (messages, config) => {
         impact: +18
       }
     ],
-    
+
     redFlags: [],
-    
+
     greenLights: [
       { signal: 'Proactive follow-up', message: 'Any luck with your schedule?', weight: 'Strong' },
       { signal: 'Research investment', message: 'I\'ve been reading up on your firm', weight: 'Very Strong' },
@@ -121,7 +122,7 @@ const analyzeConversation = (messages, config) => {
       { signal: 'Scheduling initiative', message: 'I\'ll send a calendar invite', weight: 'Moderate' },
       { signal: 'Compliment escalation', message: 'impressive client list', weight: 'Strong' }
     ],
-    
+
     optimalTiming: {
       bestDays: ['Tuesday', 'Wednesday', 'Thursday'],
       bestHours: '2pm - 5pm',
@@ -129,7 +130,7 @@ const analyzeConversation = (messages, config) => {
       responseDelay: '30-90 minutes',
       reasoning: 'Their engagement peaks mid-afternoon. They respect professional pacing but follow up when interested.'
     },
-    
+
     quickWins: [
       {
         action: 'Prepare 2-3 specific insights about Asian market entry',
@@ -154,12 +155,18 @@ const analyzeConversation = (messages, config) => {
 const parseConversation = (rawText) => {
   const lines = rawText.trim().split('\n').filter(line => line.trim());
   const messages = [];
-  
+
   // WhatsApp format: [date, time] Speaker: message
   const whatsappRegex = /\[([^\]]+)\]\s*([^:]+):\s*(.+)/;
+  // iMessage/SMS format with date: date, time - Speaker: message
+  const imessageRegex = /^(\d{1,2}\/\d{1,2}\/\d{2,4},?\s*\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)\s*[-–]\s*([^:]+):\s*(.+)/i;
+  // Telegram format: Speaker, [date time]: message
+  const telegramRegex = /^([^,\[]+),?\s*\[([^\]]+)\]:\s*(.+)/;
   // Generic format: Speaker: message
   const genericRegex = /^([^:]+):\s*(.+)/;
-  
+  // Time-only format: HH:MM Speaker: message
+  const timeOnlyRegex = /^(\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:AM|PM))?)\s+([^:]+):\s*(.+)/i;
+
   for (const line of lines) {
     let match = line.match(whatsappRegex);
     if (match) {
@@ -170,7 +177,37 @@ const parseConversation = (rawText) => {
       });
       continue;
     }
-    
+
+    match = line.match(imessageRegex);
+    if (match) {
+      messages.push({
+        timestamp: match[1],
+        speaker: match[2].trim(),
+        content: match[3].trim()
+      });
+      continue;
+    }
+
+    match = line.match(telegramRegex);
+    if (match) {
+      messages.push({
+        timestamp: match[2],
+        speaker: match[1].trim(),
+        content: match[3].trim()
+      });
+      continue;
+    }
+
+    match = line.match(timeOnlyRegex);
+    if (match) {
+      messages.push({
+        timestamp: match[1],
+        speaker: match[2].trim(),
+        content: match[3].trim()
+      });
+      continue;
+    }
+
     match = line.match(genericRegex);
     if (match) {
       messages.push({
@@ -180,8 +217,65 @@ const parseConversation = (rawText) => {
       });
     }
   }
-  
+
   return messages;
+};
+
+// Extract timestamp from OCR text for sorting
+const extractTimestamp = (text) => {
+  // Common timestamp patterns
+  const patterns = [
+    /\[(\d{1,2}\/\d{1,2}\/\d{2,4},?\s*\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)\]/i,
+    /(\d{1,2}\/\d{1,2}\/\d{2,4},?\s*\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)/i,
+    /(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)/i,
+    /(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      return match[1];
+    }
+  }
+  return null;
+};
+
+// Parse timestamp string to Date object for sorting
+const parseTimestampToDate = (timestamp) => {
+  if (!timestamp) return new Date(0);
+
+  // Try various date formats
+  const cleanTimestamp = timestamp.replace(/,/g, '').trim();
+
+  // MM/DD/YY HH:MM AM/PM
+  const match1 = cleanTimestamp.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?/i);
+  if (match1) {
+    let [, month, day, year, hours, minutes, seconds, ampm] = match1;
+    year = year.length === 2 ? '20' + year : year;
+    hours = parseInt(hours);
+    if (ampm) {
+      if (ampm.toUpperCase() === 'PM' && hours !== 12) hours += 12;
+      if (ampm.toUpperCase() === 'AM' && hours === 12) hours = 0;
+    }
+    return new Date(year, month - 1, day, hours, minutes, seconds || 0);
+  }
+
+  // HH:MM AM/PM only (use today's date)
+  const match2 = cleanTimestamp.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+  if (match2) {
+    let [, hours, minutes, seconds, ampm] = match2;
+    const now = new Date();
+    hours = parseInt(hours);
+    if (ampm) {
+      if (ampm.toUpperCase() === 'PM' && hours !== 12) hours += 12;
+      if (ampm.toUpperCase() === 'AM' && hours === 12) hours = 0;
+    }
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, seconds || 0);
+  }
+
+  // Fallback to Date.parse
+  const parsed = Date.parse(cleanTimestamp);
+  return isNaN(parsed) ? new Date(0) : new Date(parsed);
 };
 
 // Generate strategic message variants
@@ -225,7 +319,7 @@ const generateMessages = (analysis, objective) => {
       }
     ]
   };
-  
+
   return variants[objective] || variants['increase-investment'];
 };
 
@@ -270,7 +364,7 @@ const Badge = ({ children, variant = 'default' }) => {
     info: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20',
     purple: 'bg-purple-500/10 text-purple-400 border-purple-500/20'
   };
-  
+
   return (
     <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${variants[variant]}`}>
       {children}
@@ -285,10 +379,10 @@ const ProgressBar = ({ value, max = 100, color = 'indigo' }) => {
     amber: 'bg-amber-500',
     cyan: 'bg-cyan-500'
   };
-  
+
   return (
     <div className="h-2 bg-white/5 rounded-full overflow-hidden">
-      <div 
+      <div
         className={`h-full ${colors[color]} rounded-full transition-all duration-1000 ease-out`}
         style={{ width: `${Math.min(100, (value / max) * 100)}%` }}
       />
@@ -298,9 +392,9 @@ const ProgressBar = ({ value, max = 100, color = 'indigo' }) => {
 
 const Tooltip = ({ children, content }) => {
   const [show, setShow] = useState(false);
-  
+
   return (
-    <span 
+    <span
       className="relative cursor-help border-b border-dashed border-indigo-400/50"
       onMouseEnter={() => setShow(true)}
       onMouseLeave={() => setShow(false)}
@@ -319,7 +413,11 @@ const Tooltip = ({ children, content }) => {
 // Main Application
 export default function SignalAnalysisLab() {
   const [step, setStep] = useState(1);
+  const [inputMode, setInputMode] = useState('text'); // 'text' or 'image'
   const [rawConversation, setRawConversation] = useState('');
+  const [uploadedImages, setUploadedImages] = useState([]);
+  const [processingImages, setProcessingImages] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState({ current: 0, total: 0 });
   const [messages, setMessages] = useState([]);
   const [config, setConfig] = useState({
     relationshipType: 'potential-client',
@@ -340,6 +438,8 @@ export default function SignalAnalysisLab() {
   });
   const [copied, setCopied] = useState(false);
   const [showMoveTree, setShowMoveTree] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef(null);
 
   const toggleSection = (section) => {
     setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
@@ -347,6 +447,130 @@ export default function SignalAnalysisLab() {
 
   const handleLoadSample = () => {
     setRawConversation(SAMPLE_CONVERSATION);
+  };
+
+  // Handle image file selection
+  const handleImageSelect = useCallback(async (files) => {
+    const imageFiles = Array.from(files).filter(f =>
+      f.type.startsWith('image/') || f.name.match(/\.(png|jpg|jpeg|gif|webp|bmp)$/i)
+    );
+
+    if (imageFiles.length === 0) return;
+
+    const newImages = await Promise.all(imageFiles.map(async (file) => {
+      const url = URL.createObjectURL(file);
+      return {
+        id: Math.random().toString(36).substr(2, 9),
+        file,
+        url,
+        name: file.name,
+        extractedText: '',
+        timestamp: null,
+        processing: false,
+        processed: false
+      };
+    }));
+
+    setUploadedImages(prev => [...prev, ...newImages]);
+    setInputMode('image');
+  }, []);
+
+  // Handle drag and drop
+  const handleDrop = useCallback((e) => {
+    e.preventDefault();
+    setDragOver(false);
+    handleImageSelect(e.dataTransfer.files);
+  }, [handleImageSelect]);
+
+  const handleDragOver = useCallback((e) => {
+    e.preventDefault();
+    setDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e) => {
+    e.preventDefault();
+    setDragOver(false);
+  }, []);
+
+  // Remove an image
+  const removeImage = (id) => {
+    setUploadedImages(prev => {
+      const updated = prev.filter(img => img.id !== id);
+      if (updated.length === 0) setInputMode('text');
+      return updated;
+    });
+  };
+
+  // Process images with OCR
+  const processImagesOCR = async () => {
+    if (uploadedImages.length === 0) return;
+
+    setProcessingImages(true);
+    setOcrProgress({ current: 0, total: uploadedImages.length });
+
+    const processedImages = [];
+
+    for (let i = 0; i < uploadedImages.length; i++) {
+      const img = uploadedImages[i];
+      setOcrProgress({ current: i + 1, total: uploadedImages.length });
+
+      try {
+        const result = await Tesseract.recognize(img.url, 'eng', {
+          logger: m => {
+            // Optional: more granular progress
+          }
+        });
+
+        const text = result.data.text;
+        const timestamp = extractTimestamp(text);
+
+        processedImages.push({
+          ...img,
+          extractedText: text,
+          timestamp,
+          parsedDate: parseTimestampToDate(timestamp),
+          processed: true
+        });
+      } catch (error) {
+        console.error('OCR error:', error);
+        processedImages.push({
+          ...img,
+          extractedText: '',
+          timestamp: null,
+          processed: true,
+          error: true
+        });
+      }
+    }
+
+    // Sort by timestamp
+    processedImages.sort((a, b) => {
+      if (!a.parsedDate && !b.parsedDate) return 0;
+      if (!a.parsedDate) return 1;
+      if (!b.parsedDate) return -1;
+      return a.parsedDate - b.parsedDate;
+    });
+
+    setUploadedImages(processedImages);
+
+    // Combine extracted text
+    const combinedText = processedImages
+      .map(img => img.extractedText)
+      .filter(t => t.trim())
+      .join('\n\n');
+
+    setRawConversation(combinedText);
+    setProcessingImages(false);
+  };
+
+  // Reorder images manually
+  const moveImage = (fromIndex, toIndex) => {
+    setUploadedImages(prev => {
+      const updated = [...prev];
+      const [moved] = updated.splice(fromIndex, 1);
+      updated.splice(toIndex, 0, moved);
+      return updated;
+    });
   };
 
   const handleParse = () => {
@@ -373,7 +597,7 @@ export default function SignalAnalysisLab() {
   };
 
   const SectionHeader = ({ icon: Icon, title, section, badge }) => (
-    <button 
+    <button
       onClick={() => toggleSection(section)}
       className="w-full flex items-center justify-between mb-4 group"
     >
@@ -387,6 +611,10 @@ export default function SignalAnalysisLab() {
       <ChevronDown className={`w-5 h-5 text-zinc-500 transition-transform ${expandedSections[section] ? 'rotate-180' : ''}`} />
     </button>
   );
+
+  const canAnalyze = inputMode === 'text'
+    ? rawConversation.trim().length >= 20
+    : uploadedImages.length > 0 && uploadedImages.every(img => img.processed) && rawConversation.trim().length >= 20;
 
   return (
     <div className="min-h-screen bg-[#08080c] text-zinc-100">
@@ -408,7 +636,7 @@ export default function SignalAnalysisLab() {
               <p className="text-xs text-zinc-500">Strategic Communication Intelligence</p>
             </div>
           </div>
-          
+
           {step > 1 && (
             <div className="flex items-center gap-2">
               {[1, 2, 3].map(s => (
@@ -420,51 +648,219 @@ export default function SignalAnalysisLab() {
       </header>
 
       <main className="relative max-w-5xl mx-auto px-6 py-8">
-        
+
         {/* Step 1: Upload */}
         {step === 1 && (
           <div className="max-w-2xl mx-auto space-y-6 animate-in fade-in duration-500">
             <div className="text-center mb-10">
               <h2 className="text-3xl font-bold text-white mb-3">Decode Any Conversation</h2>
-              <p className="text-zinc-400 text-lg">Upload a conversation log. Get strategic intelligence.</p>
+              <p className="text-zinc-400 text-lg">Paste text or upload screenshots. Get strategic intelligence.</p>
             </div>
 
-            <Card glow>
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <label className="text-sm font-medium text-zinc-300">Paste conversation</label>
-                  <button 
-                    onClick={handleLoadSample}
-                    className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-1"
-                  >
-                    <Sparkles className="w-3 h-3" /> Load sample
-                  </button>
-                </div>
-                
-                <textarea
-                  value={rawConversation}
-                  onChange={(e) => setRawConversation(e.target.value)}
-                  placeholder="Paste your WhatsApp, iMessage, or any text conversation here..."
-                  className="w-full h-64 bg-white/[0.02] border border-white/[0.06] rounded-lg px-4 py-3 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/20 resize-none font-mono"
-                />
+            {/* Input Mode Toggle */}
+            <div className="flex justify-center gap-2 mb-4">
+              <button
+                onClick={() => setInputMode('text')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+                  inputMode === 'text'
+                    ? 'bg-indigo-500 text-white'
+                    : 'bg-white/5 text-zinc-400 hover:bg-white/10'
+                }`}
+              >
+                <FileText className="w-4 h-4" /> Paste Text
+              </button>
+              <button
+                onClick={() => setInputMode('image')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+                  inputMode === 'image'
+                    ? 'bg-indigo-500 text-white'
+                    : 'bg-white/5 text-zinc-400 hover:bg-white/10'
+                }`}
+              >
+                <Image className="w-4 h-4" /> Upload Screenshots
+              </button>
+            </div>
 
-                <div className="flex items-center gap-3 pt-2">
-                  <div className="p-2 bg-white/5 rounded-lg">
-                    <FileText className="w-4 h-4 text-zinc-500" />
+            {inputMode === 'text' ? (
+              <Card glow>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium text-zinc-300">Paste conversation</label>
+                    <button
+                      onClick={handleLoadSample}
+                      className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-1"
+                    >
+                      <Sparkles className="w-3 h-3" /> Load sample
+                    </button>
                   </div>
-                  <div className="text-xs text-zinc-500">
-                    Supports WhatsApp exports, iMessage, Telegram, or any "Speaker: message" format
+
+                  <textarea
+                    value={rawConversation}
+                    onChange={(e) => setRawConversation(e.target.value)}
+                    placeholder="Paste your WhatsApp, iMessage, or any text conversation here..."
+                    className="w-full h-64 bg-white/[0.02] border border-white/[0.06] rounded-lg px-4 py-3 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/20 resize-none font-mono"
+                  />
+
+                  <div className="flex items-center gap-3 pt-2">
+                    <div className="p-2 bg-white/5 rounded-lg">
+                      <FileText className="w-4 h-4 text-zinc-500" />
+                    </div>
+                    <div className="text-xs text-zinc-500">
+                      Supports WhatsApp exports, iMessage, Telegram, or any "Speaker: message" format
+                    </div>
                   </div>
                 </div>
-              </div>
-            </Card>
+              </Card>
+            ) : (
+              <Card glow>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium text-zinc-300">Upload conversation screenshots</label>
+                    <span className="text-xs text-zinc-500">{uploadedImages.length} image{uploadedImages.length !== 1 ? 's' : ''}</span>
+                  </div>
+
+                  {/* Drop Zone */}
+                  <div
+                    onDrop={handleDrop}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onClick={() => fileInputRef.current?.click()}
+                    className={`
+                      relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all
+                      ${dragOver
+                        ? 'border-indigo-500 bg-indigo-500/10'
+                        : 'border-white/10 hover:border-white/20 hover:bg-white/[0.02]'
+                      }
+                    `}
+                  >
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={(e) => handleImageSelect(e.target.files)}
+                      className="hidden"
+                    />
+                    <Upload className={`w-10 h-10 mx-auto mb-3 ${dragOver ? 'text-indigo-400' : 'text-zinc-600'}`} />
+                    <p className="text-sm text-zinc-400 mb-1">
+                      Drop images here or click to browse
+                    </p>
+                    <p className="text-xs text-zinc-600">
+                      PNG, JPG, JPEG supported • Multiple images allowed
+                    </p>
+                  </div>
+
+                  {/* Image Preview Grid */}
+                  {uploadedImages.length > 0 && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-zinc-500">
+                          {uploadedImages.some(img => img.timestamp)
+                            ? 'Sorted by detected timestamp'
+                            : 'Drag to reorder if needed'}
+                        </span>
+                        {!processingImages && uploadedImages.some(img => !img.processed) && (
+                          <button
+                            onClick={processImagesOCR}
+                            className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+                          >
+                            <Zap className="w-3 h-3" /> Extract text
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                        {uploadedImages.map((img, index) => (
+                          <div
+                            key={img.id}
+                            className="relative group rounded-lg overflow-hidden border border-white/10 bg-white/[0.02]"
+                          >
+                            <img
+                              src={img.url}
+                              alt={img.name}
+                              className="w-full h-24 object-cover"
+                            />
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
+
+                            {/* Status indicator */}
+                            <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between">
+                              <span className="text-[10px] text-zinc-400 truncate max-w-[60%]">
+                                {img.timestamp || `Image ${index + 1}`}
+                              </span>
+                              {img.processed ? (
+                                <CheckCircle className="w-3 h-3 text-emerald-400" />
+                              ) : img.processing ? (
+                                <Loader2 className="w-3 h-3 text-indigo-400 animate-spin" />
+                              ) : null}
+                            </div>
+
+                            {/* Remove button */}
+                            <button
+                              onClick={(e) => { e.stopPropagation(); removeImage(img.id); }}
+                              className="absolute top-1 right-1 p-1 rounded-full bg-black/50 text-white/70 hover:text-white hover:bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* OCR Progress */}
+                      {processingImages && (
+                        <div className="p-4 bg-indigo-500/5 border border-indigo-500/20 rounded-lg">
+                          <div className="flex items-center gap-3 mb-2">
+                            <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />
+                            <span className="text-sm text-indigo-400">
+                              Extracting text... ({ocrProgress.current}/{ocrProgress.total})
+                            </span>
+                          </div>
+                          <ProgressBar
+                            value={ocrProgress.current}
+                            max={ocrProgress.total}
+                            color="indigo"
+                          />
+                        </div>
+                      )}
+
+                      {/* Extracted Text Preview */}
+                      {uploadedImages.every(img => img.processed) && rawConversation && (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-zinc-500">Extracted text (editable)</span>
+                            <Badge variant="success">Ready</Badge>
+                          </div>
+                          <textarea
+                            value={rawConversation}
+                            onChange={(e) => setRawConversation(e.target.value)}
+                            className="w-full h-40 bg-white/[0.02] border border-white/[0.06] rounded-lg px-4 py-3 text-sm text-zinc-200 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/20 resize-none font-mono"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-3 pt-2">
+                    <div className="p-2 bg-white/5 rounded-lg">
+                      <Image className="w-4 h-4 text-zinc-500" />
+                    </div>
+                    <div className="text-xs text-zinc-500">
+                      Screenshots are processed locally using OCR. Timestamps are auto-detected for sorting.
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            )}
 
             <button
               onClick={handleParse}
-              disabled={rawConversation.trim().length < 20}
+              disabled={!canAnalyze || (inputMode === 'image' && processingImages)}
               className="w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl font-semibold text-white transition-all flex items-center justify-center gap-2 group"
             >
-              Analyze Conversation <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+              {inputMode === 'image' && uploadedImages.length > 0 && !uploadedImages.every(img => img.processed) ? (
+                <>Extract & Analyze <Zap className="w-4 h-4" /></>
+              ) : (
+                <>Analyze Conversation <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" /></>
+              )}
             </button>
 
             <p className="text-center text-xs text-zinc-600">
@@ -575,7 +971,7 @@ export default function SignalAnalysisLab() {
         {/* Step 3: Analysis Results */}
         {step === 3 && analysis && (
           <div className="space-y-6 animate-in fade-in duration-500">
-            
+
             {/* Win Probability Hero */}
             <Card glow className="relative overflow-hidden">
               <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-to-bl from-indigo-500/10 to-transparent rounded-full blur-2xl" />
@@ -590,7 +986,7 @@ export default function SignalAnalysisLab() {
                   </div>
                   <p className="text-sm text-zinc-500">Likelihood of achieving your stated objective</p>
                 </div>
-                
+
                 <div className="flex items-center gap-6">
                   <div className="text-center">
                     <div className="text-2xl font-bold text-white">{analysis.messageCount.them}</div>
@@ -643,15 +1039,15 @@ export default function SignalAnalysisLab() {
                         <span className="text-zinc-500">You</span>
                       </div>
                       <div className="relative h-4 bg-white/5 rounded-full overflow-hidden">
-                        <div 
+                        <div
                           className="absolute inset-y-0 left-0 bg-gradient-to-r from-red-500 to-amber-500 rounded-full"
                           style={{ width: `${100 - analysis.powerBalance}%` }}
                         />
-                        <div 
+                        <div
                           className="absolute inset-y-0 right-0 bg-gradient-to-l from-emerald-500 to-cyan-500 rounded-full"
                           style={{ width: `${analysis.powerBalance}%` }}
                         />
-                        <div 
+                        <div
                           className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow-lg border-2 border-zinc-800"
                           style={{ left: `${analysis.powerBalance}%`, transform: 'translate(-50%, -50%)' }}
                         />
@@ -675,7 +1071,7 @@ export default function SignalAnalysisLab() {
                         </div>
                       </div>
                     </div>
-                    
+
                     <div className="space-y-3">
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-zinc-500">Your avg response</span>
@@ -713,7 +1109,7 @@ export default function SignalAnalysisLab() {
                         <div className="text-sm font-medium text-white">{analysis.behavioralProfile.responsePattern}</div>
                       </div>
                     </div>
-                    
+
                     <div>
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs text-zinc-500">Consistency Score</span>
@@ -749,7 +1145,7 @@ export default function SignalAnalysisLab() {
                   <Share2 className="w-4 h-4 text-zinc-500 group-hover:text-purple-400" />
                 </button>
               </div>
-              
+
               <div className="flex flex-col md:flex-row gap-6">
                 <div className="md:w-1/3">
                   <div className="p-6 bg-gradient-to-br from-purple-500/10 to-indigo-500/10 rounded-xl border border-purple-500/20 text-center">
@@ -760,10 +1156,10 @@ export default function SignalAnalysisLab() {
                     <div className="text-sm text-purple-300">{analysis.yourDNA.archetype}</div>
                   </div>
                 </div>
-                
+
                 <div className="md:w-2/3 space-y-4">
                   <p className="text-sm text-zinc-400">{analysis.yourDNA.archetypeDescription}</p>
-                  
+
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <div className="text-xs text-zinc-500 mb-2">Strengths</div>
@@ -803,7 +1199,7 @@ export default function SignalAnalysisLab() {
                       <div className="absolute left-0 top-1 w-6 h-6 rounded-full bg-indigo-500/20 flex items-center justify-center">
                         <div className="w-2 h-2 rounded-full bg-indigo-500" />
                       </div>
-                      
+
                       <div className="space-y-2">
                         <div className="flex items-center gap-2 flex-wrap">
                           <Badge variant={moment.impact > 0 ? 'success' : 'danger'}>
@@ -842,7 +1238,7 @@ export default function SignalAnalysisLab() {
                       ))}
                     </div>
                   </div>
-                  
+
                   <div>
                     <div className="flex items-center gap-2 mb-4">
                       <AlertTriangle className="w-4 h-4 text-red-400" />
@@ -908,8 +1304,8 @@ export default function SignalAnalysisLab() {
                         key={i}
                         onClick={() => { setSelectedVariant(i); setShowMoveTree(false); }}
                         className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                          selectedVariant === i 
-                            ? 'bg-indigo-500 text-white' 
+                          selectedVariant === i
+                            ? 'bg-indigo-500 text-white'
                             : 'bg-white/5 text-zinc-400 hover:bg-white/10'
                         }`}
                       >
@@ -970,7 +1366,7 @@ export default function SignalAnalysisLab() {
                           {showMoveTree ? 'Hide' : 'Show'} Move Tree
                           <ChevronDown className={`w-4 h-4 transition-transform ${showMoveTree ? 'rotate-180' : ''}`} />
                         </button>
-                        
+
                         {showMoveTree && moveTree && (
                           <div className="mt-4 space-y-3">
                             {Object.entries(moveTree).map(([key, data]) => (
@@ -1011,7 +1407,7 @@ export default function SignalAnalysisLab() {
             {/* Reset */}
             <div className="flex justify-center pt-4">
               <button
-                onClick={() => { setStep(1); setAnalysis(null); setMessages([]); setRawConversation(''); }}
+                onClick={() => { setStep(1); setAnalysis(null); setMessages([]); setRawConversation(''); setUploadedImages([]); setInputMode('text'); }}
                 className="px-6 py-3 bg-white/5 hover:bg-white/10 rounded-xl text-sm text-zinc-400 transition-all"
               >
                 Analyze Another Conversation
